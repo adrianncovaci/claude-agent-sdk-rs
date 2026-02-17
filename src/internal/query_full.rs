@@ -12,6 +12,7 @@ use tokio::sync::oneshot;
 use crate::errors::{ClaudeError, Result};
 use crate::types::hooks::{HookCallback, HookContext, HookInput, HookMatcher};
 use crate::types::mcp::McpSdkServerConfig;
+use crate::types::permissions::{CanUseToolCallback, PermissionResult, ToolPermissionContext};
 
 use super::transport::Transport;
 
@@ -70,6 +71,8 @@ pub struct QueryFull {
     pub(crate) message_rx: flume::Receiver<serde_json::Value>,
     /// Initialization result - set once during initialize(), read many times
     initialization_result: OnceLock<serde_json::Value>,
+    /// Callback for tool usage permission (canUseTool)
+    can_use_tool_callback: Arc<Option<CanUseToolCallback>>,
 }
 
 impl QueryFull {
@@ -87,6 +90,7 @@ impl QueryFull {
             message_tx,
             message_rx,
             initialization_result: OnceLock::new(),
+            can_use_tool_callback: Arc::new(None),
         }
     }
 
@@ -105,6 +109,7 @@ impl QueryFull {
             message_tx,
             message_rx,
             initialization_result: OnceLock::new(),
+            can_use_tool_callback: Arc::new(None),
         }
     }
 
@@ -114,6 +119,11 @@ impl QueryFull {
         for (name, config) in servers {
             self.sdk_mcp_servers.insert(name, config);
         }
+    }
+
+    /// Set the can_use_tool callback for permission handling
+    pub fn set_can_use_tool(&mut self, callback: Option<CanUseToolCallback>) {
+        self.can_use_tool_callback = Arc::new(callback);
     }
 
     /// Initialize with hooks
@@ -180,6 +190,7 @@ impl QueryFull {
         let transport_for_hooks = Arc::clone(&self.transport);
         let hook_callbacks = Arc::clone(&self.hook_callbacks);
         let sdk_mcp_servers = Arc::clone(&self.sdk_mcp_servers);
+        let can_use_tool = Arc::clone(&self.can_use_tool_callback);
         let pending_responses = Arc::clone(&self.pending_responses);
         let message_tx = self.message_tx.clone();
 
@@ -223,6 +234,7 @@ impl QueryFull {
                                     let transport_clone = Arc::clone(&transport_for_hooks);
                                     let hook_callbacks_clone = Arc::clone(&hook_callbacks);
                                     let sdk_mcp_servers_clone = Arc::clone(&sdk_mcp_servers);
+                                    let can_use_tool_clone = Arc::clone(&can_use_tool);
 
                                     tokio::spawn(async move {
                                         if let Err(e) = Self::handle_control_request(
@@ -230,6 +242,7 @@ impl QueryFull {
                                             transport_clone,
                                             hook_callbacks_clone,
                                             sdk_mcp_servers_clone,
+                                            can_use_tool_clone,
                                         )
                                         .await
                                         {
@@ -266,6 +279,7 @@ impl QueryFull {
         transport: Arc<dyn Transport>,
         hook_callbacks: Arc<DashMap<String, HookCallback>>,
         sdk_mcp_servers: Arc<DashMap<String, McpSdkServerConfig>>,
+        can_use_tool_callback: Arc<Option<CanUseToolCallback>>,
     ) -> Result<()> {
         let request_id = request.request_id;
         let request_data = request.request;
@@ -315,6 +329,43 @@ impl QueryFull {
                 serde_json::to_value(&hook_output).map_err(|e| {
                     ClaudeError::ControlProtocol(format!("Failed to serialize hook output: {}", e))
                 })?
+            }
+            "can_use_tool" => {
+                // Handle tool permission request via canUseTool callback
+                let tool_name = request_data
+                    .get("tool_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                let tool_input = request_data
+                    .get("input")
+                    .cloned()
+                    .unwrap_or(json!({}));
+
+                let suggestions = request_data
+                    .get("suggestions")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok())
+                    .unwrap_or_default();
+
+                let context = ToolPermissionContext {
+                    signal: None,
+                    suggestions,
+                };
+
+                if let Some(ref callback) = *can_use_tool_callback {
+                    let result = callback(tool_name, tool_input, context).await;
+                    serde_json::to_value(&result).map_err(|e| {
+                        ClaudeError::ControlProtocol(format!(
+                            "Failed to serialize permission result: {}",
+                            e
+                        ))
+                    })?
+                } else {
+                    // No callback configured - default allow
+                    serde_json::to_value(&PermissionResult::Allow(Default::default()))
+                        .unwrap_or(json!({"behavior": "allow"}))
+                }
             }
             "mcp_message" => {
                 // Handle SDK MCP message

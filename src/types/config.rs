@@ -143,6 +143,14 @@ pub struct ClaudeAgentOptions {
     #[builder(default = true)]
     pub verbose: bool,
 
+    /// Filesystem sandbox configuration applied via Landlock (Linux only).
+    ///
+    /// When set, the spawned Claude CLI subprocess is restricted at the OS level
+    /// so it can only write to the specified directories. Reads are unrestricted.
+    /// On non-Linux platforms this option is accepted but ignored.
+    #[builder(default, setter(strip_option))]
+    pub landlock_sandbox: Option<LandlockSandboxConfig>,
+
     /// Efficiency configuration for built-in efficiency hooks.
     ///
     /// When configured, the SDK automatically injects hooks to:
@@ -480,6 +488,18 @@ pub struct SandboxSettings {
     )]
     #[builder(default, setter(strip_option))]
     pub enable_weaker_nested_sandbox: Option<bool>,
+}
+
+/// Filesystem sandbox configuration applied via Landlock (Linux only).
+///
+/// When the subprocess is spawned, a Landlock ruleset restricts filesystem
+/// writes to only the listed directories (plus `/tmp` and `~/.claude`).
+/// Reads and execution are allowed everywhere.
+/// If `writable_roots` is empty, no sandbox is applied.
+#[derive(Debug, Clone, Default)]
+pub struct LandlockSandboxConfig {
+    /// Directories the subprocess is allowed to write to.
+    pub writable_roots: Vec<PathBuf>,
 }
 
 #[cfg(test)]

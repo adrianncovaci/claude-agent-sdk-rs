@@ -680,6 +680,20 @@ impl Transport for SubprocessTransport {
             cmd.current_dir(cwd);
         }
 
+        // Apply Landlock filesystem sandbox (Linux only)
+        #[cfg(target_os = "linux")]
+        if let Some(ref landlock) = self.options.landlock_sandbox {
+            if !landlock.writable_roots.is_empty() {
+                let writable_roots: Vec<std::path::PathBuf> = landlock.writable_roots.clone();
+                unsafe {
+                    cmd.pre_exec(move || {
+                        crate::internal::sandbox::apply_landlock_sandbox(&writable_roots)
+                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+                    });
+                }
+            }
+        }
+
         // Spawn process
         let mut child = cmd.spawn().map_err(|e| {
             ClaudeError::Process(ProcessError::new(

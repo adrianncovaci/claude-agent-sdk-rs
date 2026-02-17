@@ -164,6 +164,9 @@ impl ClaudeClient {
         let sdk_mcp_servers = self.extract_sdk_mcp_servers();
         query.set_sdk_mcp_servers(sdk_mcp_servers);
 
+        // Pass can_use_tool callback to query
+        query.set_can_use_tool(self.options.can_use_tool.clone());
+
         // Build hooks configuration
         let hooks = self.build_hooks_config();
 
@@ -297,6 +300,14 @@ impl ClaudeClient {
     pub async fn connect(&mut self) -> Result<()> {
         if self.connected {
             return Ok(());
+        }
+
+        // When can_use_tool is configured, route permission prompts through
+        // the stdio control protocol so the CLI sends can_use_tool requests
+        if self.options.can_use_tool.is_some()
+            && self.options.permission_prompt_tool_name.is_none()
+        {
+            self.options.permission_prompt_tool_name = Some("stdio".to_string());
         }
 
         // Create transport in streaming mode (no initial prompt)

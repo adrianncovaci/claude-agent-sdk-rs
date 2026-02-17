@@ -12,7 +12,7 @@ pub type CanUseToolCallback = Arc<
 >;
 
 /// Context provided to permission callbacks
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ToolPermissionContext {
     /// Abort signal (future feature)
     pub signal: Option<()>,
@@ -34,11 +34,21 @@ pub enum PermissionResult {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PermissionResultAllow {
     /// Updated tool input (if modified)
-    #[serde(skip_serializing_if = "Option::is_none", rename = "updatedInput")]
+    #[serde(rename = "updatedInput", serialize_with = "serialize_updated_input", default)]
     pub updated_input: Option<serde_json::Value>,
     /// Permission updates to apply
     #[serde(skip_serializing_if = "Option::is_none", rename = "updatedPermissions")]
     pub updated_permissions: Option<Vec<PermissionUpdate>>,
+}
+
+fn serialize_updated_input<S>(value: &Option<serde_json::Value>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match value {
+        Some(v) => v.serialize(serializer),
+        None => serde_json::json!({}).serialize(serializer),
+    }
 }
 
 /// Permission result for denying tool use
@@ -169,6 +179,17 @@ mod tests {
         let json = serde_json::to_value(&result).unwrap();
         assert_eq!(json["behavior"], "allow");
         assert_eq!(json["updatedInput"]["modified"], true);
+    }
+
+    #[test]
+    fn test_permission_result_allow_default_has_updated_input() {
+        // CLI requires updatedInput to always be present (Zod validation)
+        let result = PermissionResult::Allow(PermissionResultAllow::default());
+
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["behavior"], "allow");
+        assert_eq!(json["updatedInput"], json!({}));
+        assert!(json.get("updatedPermissions").is_none());
     }
 
     #[test]
